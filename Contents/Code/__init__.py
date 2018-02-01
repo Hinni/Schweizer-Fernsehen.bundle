@@ -5,11 +5,12 @@ NAME = L('Title')
 ART = 'art-default.jpg'
 ICON = 'icon-default.jpg'
 
-API_BASE = 'http://www.srf.ch/podcasts'
-API_DIR = 'http://www.srf.ch/play/tv/episodesfromshow?layout=json&id='
-API_ITEM = 'https://il.srgssr.ch/integrationlayer/1.0/ue/srf/video/play/%s.json'
+API_BASE = 'https://www.srf.ch'
+API_INIT = API_BASE + '/podcasts'
+API_SHOW = API_BASE + '/feed/podcast/hd/%s.xml'
 
-###############################################################################
+####################################################################################################
+# Initialize plugin
 def Start():
 
     ObjectContainer.title1 = NAME
@@ -22,7 +23,7 @@ def Start():
 
 
 ####################################################################################################
-# Main Menu is static
+# Our main menu is static
 @handler(PREFIX, NAME, art=ART, thumb=ICON)
 def VideoMainMenu():
 
@@ -43,23 +44,26 @@ def SubMenu(title, url):
 
     oc = ObjectContainer(title1=L('Title'), title2=title)
 
-    # Search data for the choosen channel
+    # Load data for given channel
     try:
-        source = HTML.ElementFromURL(API_BASE)
+        source = HTML.ElementFromURL(API_INIT)
     except Exception as e:
         Log.Error(e)
         return ObjectContainer(header=L('Empty'), message=L('There are no shows available.'))
 
-    # Select all available shows
-    shows = source.xpath('//li[contains(@data-filter-options,"'+ url + '")]')
+    # Filter all available shows with given channel
+    shows = source.xpath('//li[contains(@data-filter-options,"' + url + '")]')
 
-    # Filter the avaiable shows by the choosen channel
+    # Loop over filtered results
     for show in shows:
 
         show_title = show.xpath('./a/img')[0].get('title')
         show_summary = show.xpath('./div[@class="module-content"]/p')[0].text
-        show_thumb = show.xpath('./a/img')[0].get('data-retina-src') # better quality than data-origina-src
-        show_id = show.xpath('.//a[contains(@class, "itunes")]')[0].get('href')[-40:][:-4] # we need the guid from the url
+        show_thumb = show.xpath('./a/img')[0].get('data-original-src') # in most cases a better choice than data-retina-src
+        show_id = show.xpath('.//div[contains(@class, "podcast-data")]')[0].get('data-podcast-uuid') # we need the guid from the url
+
+        # Check if thumb is a complete url
+        if (show_thumb.startswith('http') != True) : show_thumb = API_BASE + show_thumb
 
         oc.add(TVShowObject(
             key=Callback(GetDirectory, title=show_title, id=show_id),
@@ -75,38 +79,31 @@ def SubMenu(title, url):
 ####################################################################################################
 # List episodes of the selected show
 @route(PREFIX + '/directory')
-def GetDirectory(title, id, page=1):
+def GetDirectory(title, id):
 
     oc = ObjectContainer(title1=L('Title'), title2=title)
 
-    url = API_DIR + id + '&pageNumber=' + str(page)
+    url = API_SHOW %id
     try:
-        feed = JSON.ObjectFromURL(url, cacheTime=None)
+        feed = XML.ObjectFromURL(url, cacheTime=None)
     except Exception as e:
         Log.Error(e)
         return ObjectContainer(header=L('Empty'), message=L('There are no episodes available.'))
 
-    pages = int(feed['maxPageNumber'])
-    nextpage = str(int(page) + 1)
-
-    for item in feed['episodes']:
+    for item in feed['item']:
 
         try:
-            item_id = item['assets'][0]['url'][-36:]
+            item_id = item['guid'][0]
         except:
             pass
 
-        url = API_ITEM %item_id
+        url = API_SHOW %item_id
 
         oc.add(VideoClipObject(
             url = url,
             title = item['title'],
-            summary = item['description'],
-            thumb = Resource.ContentsOfURLWithFallback(item['imageUrl'])
+            summary = item['itunes:subtitle'],
+            thumb = Resource.ContentsOfURLWithFallback(item['itunes:image'])
         ))
-
-    # Add page break
-    if page < pages:
-        oc.add(NextPageObject(key=Callback(GetDirectory, title=title, id=id, page=nextpage), title=L('MoreItems')))
 
     return oc
